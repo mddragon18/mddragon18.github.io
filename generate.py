@@ -1,29 +1,64 @@
-import os, markdown
+import os, yaml, markdown, shutil
+from datetime import datetime
+
+# Load config
+with open("config.yml") as f:
+    CONFIG = yaml.safe_load(f)
 
 POSTS_DIR = "posts"
-TEMPLATE = open("templates/base.html").read()
+TEMPLATES_DIR = "templates"
+OUTPUT_DIR = "site"
 
-def render(title, content):
-    return TEMPLATE.replace("{{ title }}", title).replace("{{ content }}", content)
+def load_template(name):
+    return open(os.path.join(TEMPLATES_DIR, name)).read()
 
-def main():
-    links = []
-    for filename in os.listdir(POSTS_DIR):
-        if filename.endswith(".md"):
-            path = os.path.join(POSTS_DIR, filename)
-            with open(path, "r") as f:
-                text = f.read()
-            html = markdown.markdown(text)
-            title = text.strip().splitlines()[0].replace("#", "").strip()
-            outname = filename.replace(".md", ".html")
-            with open(outname, "w") as f:
-                f.write(render(title, html))
-            links.append(f'<li><a href="{outname}">{title}</a></li>')
+def render(template, **kwargs):
+    html = template
+    for k, v in kwargs.items():
+        html = html.replace(f"{{{{ {k} }}}}", str(v))
+    return html
 
-    index_html = "<h1>My Blog</h1><ul>" + "\n".join(links) + "</ul>"
-    with open("index.html", "w") as f:
-        f.write(render("Home", index_html))
+def parse_post(path):
+    with open(path) as f:
+        lines = f.read().split("---", 2)
+        meta = yaml.safe_load(lines[1])
+        body = lines[2].strip()
+    html = markdown.markdown(body, extensions=["fenced_code", "codehilite"])
+    return meta, html
+
+def build():
+    if os.path.exists(OUTPUT_DIR):
+        shutil.rmtree(OUTPUT_DIR)
+    os.makedirs(OUTPUT_DIR)
+    shutil.copytree("assets", os.path.join(OUTPUT_DIR, "assets"))
+
+    base = load_template("base.html")
+    post_tpl = load_template("post.html")
+
+    posts_meta = []
+    for fname in sorted(os.listdir(POSTS_DIR), reverse=True):
+        if not fname.endswith(".md"): continue
+        meta, html = parse_post(os.path.join(POSTS_DIR, fname))
+        slug = fname.replace(".md", "")
+        outdir = os.path.join(OUTPUT_DIR, "posts", slug)
+        os.makedirs(outdir, exist_ok=True)
+        with open(os.path.join(outdir, "index.html"), "w") as f:
+            f.write(render(base,
+                title=meta["title"],
+                content=render(post_tpl, content=html, **meta),
+                **CONFIG
+            ))
+        posts_meta.append(meta | {"slug": slug})
+
+    # Index
+    index_content = "<h1>Blog</h1><ul>"
+    for p in posts_meta:
+        url = f"/posts/{p['slug']}/"
+        index_content += f'<li><a href="{url}">{p["date"]} - {p["title"]}</a></li>'
+    index_content += "</ul>"
+
+    with open(os.path.join(OUTPUT_DIR, "index.html"), "w") as f:
+        f.write(render(base, title=CONFIG["site_name"], content=index_content, **CONFIG))
 
 if __name__ == "__main__":
-    main()
-
+    build()
